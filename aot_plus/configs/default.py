@@ -65,7 +65,7 @@ class DefaultEngineConfig():
         self.TRAIN_OPT = 'adamw'
         self.TRAIN_SGD_MOMENTUM = 0.9
         self.TRAIN_GPUS = 4
-        self.TRAIN_BATCH_SIZE = 16
+        self.TRAIN_BATCH_SIZE = 2
         self.TRAIN_TBLOG = False
         self.TRAIN_TBLOG_STEP = 50
         self.TRAIN_LOG_STEP = 20
@@ -116,9 +116,9 @@ class DefaultEngineConfig():
         self.DIST_START_GPU = 0
 
     def init_dir(self):
-        self.DIR_DATA = './datasets'
+        self.DIR_DATA = '/home/wancyuan/work/datasets'
         self.DIR_DAVIS = os.path.join(self.DIR_DATA, 'DAVIS')
-        self.DIR_VOST = os.path.join(self.DIR_DATA, 'VOST')
+        self.DIR_VOST = os.path.join(self.DIR_DATA, 'VOST', 'VOST')
         self.DIR_VISOR = os.path.join(self.DIR_DATA, 'VISOR')
         self.DIR_YTB = os.path.join(self.DIR_DATA, 'YTB')
         self.DIR_STATIC = os.path.join(self.DIR_DATA, 'Static')

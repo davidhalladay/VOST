@@ -1,7 +1,7 @@
 exp="aotplus"
 # exp="debug"
-gpu_num="4"
-devices="4,5,6,7"
+gpu_num="1"
+devices="0"
 
 # model="aott"
 # model="aots"
@@ -10,7 +10,7 @@ devices="4,5,6,7"
 model="r50_aotl"
 # model="swinb_aotl"
 	
-stage="pre_vost"
+stage="pre_vost_reweight"
 CUDA_VISIBLE_DEVICES=${devices} python tools/train.py --amp \
 	--exp_name ${exp} \
 	--stage ${stage} \

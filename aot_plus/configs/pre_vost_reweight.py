@@ -22,5 +22,5 @@ class EngineConfig(DefaultEngineConfig):
         self.PRETRAIN_FULL = True  # if False, load encoder only
         self.PRETRAIN_MODEL = os.path.join('pretrain_models', 'pre_ytb.pth')
 
-        self.REWEIGHTING = False
-        self.REWEIGHTING_TAU = 0.4
+        self.REWEIGHTING = True
+        self.REWEIGHTING_TAU = 4.0

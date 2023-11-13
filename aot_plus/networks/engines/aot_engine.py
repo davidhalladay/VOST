@@ -60,7 +60,7 @@ class AOTEngine(nn.Module):
         aux_losses = [ref_aux_loss]
         aux_masks = [ref_aux_mask]
 
-        curr_losses, curr_masks = [], []
+        curr_losses, curr_masks, gt_masks = [], [], []
         if enable_prev_frame:
             self.set_prev_frame(frame_step=1)
             with grad_state():
@@ -78,12 +78,14 @@ class AOTEngine(nn.Module):
                     self.offline_one_hot_masks[self.frame_step], self.offline_ignore_masks[self.frame_step]))
             curr_losses.append(curr_loss)
             curr_masks.append(curr_mask)
+            gt_masks.append(self.offline_masks[self.frame_step])
 
         self.match_propogate_one_frame()
         curr_loss, curr_mask, curr_prob = self.generate_loss_mask(
             self.offline_masks[self.frame_step], step, return_prob=True)
         curr_losses.append(curr_loss)
         curr_masks.append(curr_mask)
+        gt_masks.append(self.offline_masks[self.frame_step])
         for _ in range(self.total_offline_frame_num - 3):
             self.update_short_term_memory(
                 curr_mask if not use_prev_prob else curr_prob,
@@ -94,11 +96,15 @@ class AOTEngine(nn.Module):
                 self.offline_masks[self.frame_step], step, return_prob=True)
             curr_losses.append(curr_loss)
             curr_masks.append(curr_mask)
+            gt_masks.append(self.offline_masks[self.frame_step])
 
         aux_loss = torch.cat(aux_losses, dim=0).mean(dim=0)
-        pred_loss = torch.cat(curr_losses, dim=0).mean(dim=0)
-        # mask = (torch.cat(curr_losses, dim=0) > 0).float()
-        # pred_loss = torch.cat(curr_losses, dim=0).sum(-1) / (mask.sum(-1) + 0.000001)
+
+        if self.cfg.REWEIGHTING:
+            frame_weights = self.get_weights_reweighting(self.offline_masks)
+            pred_loss = (torch.cat(curr_losses, dim=0) * frame_weights).mean(dim=0)
+        else:
+            pred_loss = torch.cat(curr_losses, dim=0).mean(dim=0)
 
         loss = aux_weight * aux_loss + pred_loss
 
@@ -109,6 +115,25 @@ class AOTEngine(nn.Module):
         boards = {'image': {}, 'scalar': {}} # type:Dict[str,Dict[str,List]]
 
         return loss, all_pred_mask, all_frame_loss, boards
+
+    def get_weights_reweighting(self, mask_gt):
+        tau = self.cfg.REWEIGHTING_TAU
+        BS = mask_gt[0].shape[0]
+        Length = len(mask_gt)
+
+        # mask_gt is a list with length of L, each element is a tensor with shape [BS, 1, H, W]
+        # we first stack them to a tensor with shape [L*BS, 1, H, W] and then reshape it to [BS, L, H*W]
+        mask_gt_flatten = torch.stack(mask_gt).permute(1, 0, 2, 3, 4).reshape(BS, Length, -1)
+
+        mask_gt_binary = mask_gt_flatten / 255.
+
+        delta_mask_gt = (mask_gt_binary.sum(2)[:, 1:]-mask_gt_binary.sum(2)[:, :-1]).abs() + 1. # plus 1 to prevent nan
+
+        delta_demean = delta_mask_gt / delta_mask_gt.mean(1).unsqueeze(1)
+        frame_weights = torch.exp(delta_demean.abs()/tau)/torch.exp(delta_demean.abs()/tau).mean(1).unsqueeze(1)
+        frame_weights = frame_weights.permute(1, 0).reshape(-1)
+
+        return frame_weights
 
     def _init_losses(self):
         cfg = self.cfg
