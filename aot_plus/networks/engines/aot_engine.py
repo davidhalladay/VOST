@@ -10,6 +10,7 @@ from utils.image import one_hot_mask
 
 from networks.layers.basic import seq_to_2d
 
+from networks.layers.loss import CrossEntropyLoss, SoftJaccordLoss
 
 class AOTEngine(nn.Module):
     def __init__(self,
@@ -51,6 +52,11 @@ class AOTEngine(nn.Module):
         self.offline_encoder(all_frames, all_masks)
 
         self.add_reference_frame(frame_step=0, obj_nums=obj_nums)
+        
+        if self.cfg.REWEIGHTING:
+            self.frame_weights = self.get_weights_reweighting(self.offline_masks)
+        else:
+            self.frame_weights = None
 
         grad_state = torch.no_grad if aux_weight == 0 else torch.enable_grad
         with grad_state():
@@ -60,7 +66,7 @@ class AOTEngine(nn.Module):
         aux_losses = [ref_aux_loss]
         aux_masks = [ref_aux_mask]
 
-        curr_losses, curr_masks, gt_masks = [], [], []
+        curr_losses, curr_masks = [], []
         if enable_prev_frame:
             self.set_prev_frame(frame_step=1)
             with grad_state():
@@ -78,14 +84,12 @@ class AOTEngine(nn.Module):
                     self.offline_one_hot_masks[self.frame_step], self.offline_ignore_masks[self.frame_step]))
             curr_losses.append(curr_loss)
             curr_masks.append(curr_mask)
-            gt_masks.append(self.offline_masks[self.frame_step])
 
         self.match_propogate_one_frame()
         curr_loss, curr_mask, curr_prob = self.generate_loss_mask(
             self.offline_masks[self.frame_step], step, return_prob=True)
         curr_losses.append(curr_loss)
         curr_masks.append(curr_mask)
-        gt_masks.append(self.offline_masks[self.frame_step])
         for _ in range(self.total_offline_frame_num - 3):
             self.update_short_term_memory(
                 curr_mask if not use_prev_prob else curr_prob,
@@ -96,15 +100,10 @@ class AOTEngine(nn.Module):
                 self.offline_masks[self.frame_step], step, return_prob=True)
             curr_losses.append(curr_loss)
             curr_masks.append(curr_mask)
-            gt_masks.append(self.offline_masks[self.frame_step])
 
         aux_loss = torch.cat(aux_losses, dim=0).mean(dim=0)
-
-        if self.cfg.REWEIGHTING:
-            frame_weights = self.get_weights_reweighting(self.offline_masks)
-            pred_loss = (torch.cat(curr_losses, dim=0) * frame_weights).mean(dim=0)
-        else:
-            pred_loss = torch.cat(curr_losses, dim=0).mean(dim=0)
+        
+        pred_loss = torch.cat(curr_losses, dim=0).mean(dim=0)
 
         loss = aux_weight * aux_loss + pred_loss
 
@@ -120,7 +119,7 @@ class AOTEngine(nn.Module):
         tau = self.cfg.REWEIGHTING_TAU
         BS = mask_gt[0].shape[0]
         Length = len(mask_gt)
-
+        
         # mask_gt is a list with length of L, each element is a tensor with shape [BS, 1, H, W]
         # we first stack them to a tensor with shape [L*BS, 1, H, W] and then reshape it to [BS, L, H*W]
         mask_gt_flatten = torch.stack(mask_gt).permute(1, 0, 2, 3, 4).reshape(BS, Length, -1)
@@ -458,7 +457,6 @@ class AOTEngine(nn.Module):
                                        size=gt_mask.size()[-2:],
                                        mode="bilinear",
                                        align_corners=self.align_corners)
-
         label_list = []
         logit_list = []
         for batch_idx, obj_num in enumerate(self.obj_nums):
@@ -467,10 +465,25 @@ class AOTEngine(nn.Module):
             label_list.append(now_label.long())
             logit_list.append(now_logit)
 
-        total_loss = 0
-        for loss, loss_weight in zip(self.losses, self.loss_weights):
-            total_loss = total_loss + loss_weight * \
-                loss(logit_list, label_list, step)
+        if self.cfg.REWEIGHTING:
+            frame_weights = self.frame_weights
+            total_loss = 0
+            for loss, loss_weight in zip(self.losses, self.loss_weights):
+                if isinstance(loss, CrossEntropyLoss) and self.frame_step > 0: # not reference frame
+                    start_t = (self.frame_step - 1) * self.batch_size
+                    end_t = (self.frame_step) * self.batch_size
+                    # print('bce_loss:{}, weight:{}'.format(loss(logit_list, label_list, step), frame_weights[start_t:end_t]))
+                    total_loss = total_loss + frame_weights[start_t:end_t] * loss_weight * \
+                        loss(logit_list, label_list, step)
+                else:
+                    # print('dice_loss:{}'.format(loss(logit_list, label_list, step)))
+                    total_loss = total_loss + loss_weight * \
+                    loss(logit_list, label_list, step)
+        else:
+            total_loss = 0
+            for loss, loss_weight in zip(self.losses, self.loss_weights):
+                total_loss = total_loss + loss_weight * \
+                    loss(logit_list, label_list, step)
 
         return total_loss
 
